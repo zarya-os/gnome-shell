@@ -1,0 +1,75 @@
+From: =?utf-8?b?Ik1hcmNvIFRyZXZpc2FuIChUcmV2acOxbyki?= <mail@3v1n0.net>
+Date: Mon, 27 Mar 2023 21:02:02 +0200
+Subject: shell-global, util: Do not move snap apps to gnome-apps scope
+
+Snap applications already have their own scope so we must not move them.
+
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/gnome-shell/+bug/2011806
+---
+ js/misc/util.js    | 20 ++++++++++++++++++--
+ src/shell-global.c |  7 +++++++
+ 2 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/js/misc/util.js b/js/misc/util.js
+index e6065c4..c3c2dc7 100644
+--- a/js/misc/util.js
++++ b/js/misc/util.js
+@@ -110,6 +110,20 @@ function spawnApp(argv) {
+ // this will throw an error.
+ function trySpawn(argv) {
+     var success_, pid;
++    let path = argv[0];
++
++    if (!path?.includes('/')) {
++        path = GLib.find_program_in_path(argv[0]);
++        if (!path) {
++            throw new GLib.SpawnError({
++                code: GLib.SpawnError.NOENT,
++                message: _('Command not found'),
++            });
++        }
++
++        argv = [path, ...argv.slice(1)];
++    }
++
+     try {
+         [success_, pid] = GLib.spawn_async(
+             null, argv, null,
+@@ -141,8 +155,10 @@ function trySpawn(argv) {
+         }
+     }
+ 
+-    // Async call, we don't need the reply though
+-    GnomeDesktop.start_systemd_scope(argv[0], pid, null, null, null, () => {});
++    if (!path?.includes('/snap/bin') && !argv?.join(' ').includes('snap run')) {
++        // Async call, we don't need the reply though
++        GnomeDesktop.start_systemd_scope(argv[0], pid, null, null, null, () => {});
++    }
+ 
+     // Dummy child watch; we don't want to double-fork internally
+     // because then we lose the parent-child relationship, which
+diff --git a/src/shell-global.c b/src/shell-global.c
+index f34dc3b..fc475cd 100644
+--- a/src/shell-global.c
++++ b/src/shell-global.c
+@@ -1485,6 +1485,7 @@ shell_global_app_launched_cb (GAppLaunchContext *context,
+ {
+   gint32 pid;
+   const gchar *app_name;
++  const gchar *command_line;
+ 
+   if (!g_variant_lookup (platform_data, "pid", "i", &pid))
+     return;
+@@ -1498,6 +1499,12 @@ shell_global_app_launched_cb (GAppLaunchContext *context,
+   if (app_name == NULL)
+     app_name = g_app_info_get_executable (info);
+ 
++  command_line = g_app_info_get_commandline (info);
++  if (command_line &&
++      (strstr (command_line, "/snap/bin") ||
++       strstr (command_line, "snap run")))
++    return;
++
+   /* Start async request; we don't care about the result */
+   gnome_start_systemd_scope (app_name,
+                              pid,
